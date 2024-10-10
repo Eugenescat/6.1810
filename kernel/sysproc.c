@@ -91,3 +91,12 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+    int mask;
+    argint(0, &mask);  // 从系统调用的第一个参数中获取掩码值
+    myproc()->trace_mask = mask;  // 在进程结构体中记录掩码
+    return 0;
+}
