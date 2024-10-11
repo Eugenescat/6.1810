@@ -80,3 +80,36 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+#define NUM_SUPERPAGES 10  // 定义超级页的数量(handful)
+static char *superpages[NUM_SUPERPAGES];
+static int superpage_used[NUM_SUPERPAGES];  // 标记超级页是否已被使用
+
+void superinit() {
+  for (int i = 0; i < NUM_SUPERPAGES; i++) {
+      superpages[i] = (char *)SUPERPGROUNDUP((uint64)kalloc());  // 确保每个超级页是 2MB 对齐
+      superpage_used[i] = 0;  // 初始化为未使用
+  }
+}
+
+void *superalloc(void) 
+{
+  for (int i = 0; i < NUM_SUPERPAGES; i++) {
+      if (!superpage_used[i]) {  // 找到一个未使用的超级页
+          superpage_used[i] = 1;  // 标记为已使用
+          return (void *)superpages[i];
+      }
+  }
+  return 0;  // 如果没有可用的超级页，则返回 NULL
+}
+
+void superfree(void *ptr) 
+{
+  for (int i = 0; i < NUM_SUPERPAGES; i++) {
+      if (superpages[i] == ptr) {  // 找到对应的超级页
+          superpage_used[i] = 0;  // 标记为未使用
+          return;
+      }
+  }
+  memset(ptr, 1, SUPERPGSIZE);
+}
