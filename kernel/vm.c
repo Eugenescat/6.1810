@@ -489,8 +489,35 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 #ifdef LAB_PGTBL
 void
+print_pagetable(pagetable_t pagetable, int level, uint64 base_va) // pagetable_t 表示页表的类型，而 level 用于追踪页表的深度
+{
+  for (int i = 0; i < 512; i++) // 遍历当前页表中的所有 512 个条目（页表的每一层最多包含 512 个条目），对应着 RISC-V 的三级页表结构
+  {
+    pte_t pte = pagetable[i]; // 当前条目 pte。pte_t 是页表项的类型，它包含了映射信息，例如物理地址和权限位
+    if (pte & PTE_V) // PTE_V 是一个标志位，如果该位被设置，说明这个页表项是有效的，并且指向有效的物理内存或下一级页表
+    {
+      uint64 pa = PTE2PA(pte);  // 从 PTE 中提取物理地址（也可能是下一级页表）
+      uint64 va = base_va | i << PXSHIFT(level); // 根据层级计算虚拟地址（当我们从页表出发去遍历和打印所有条目时，我们不知道每个条目具体对应的虚拟地址是什么。用或运算累计不同层级的va）
+      printf(" ..");
+      for (int j = 0; j < level; j++) 
+      {
+        printf(" ..");
+      }
+      printf("0x%p: pte 0x%p pa 0x%p\n", (void *)va, (void *)pte, (void *)pa);
+      if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0)
+      {
+        // this PTE points to a lower-level page table.
+        print_pagetable((pagetable_t)pa, level + 1, va);
+      }
+    }
+  }
+}
+
+void
 vmprint(pagetable_t pagetable) {
   // your code here
+  printf("page table %p\n", pagetable);
+  print_pagetable(pagetable, 0, 0);
 }
 #endif
 
