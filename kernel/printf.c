@@ -176,3 +176,27 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void
+backtrace(void) {
+  uint64 fp = r_fp(); // 获取当前的帧指针
+  printf("backtrace:\n");
+
+  // while (fp != 0) { // 当帧指针不为0时，继续遍历
+  //     uint64 return_address = *(uint64 *)(fp - 8); // 返回地址保存在 fp - 8 位置
+  //     printf("0x%p\n", (void *)return_address);
+      
+  //     uint64 prev_fp = *(uint64 *)(fp - 16); // 上一个帧指针保存在 fp - 16 位置
+  //     if (PGROUNDDOWN(fp) != PGROUNDDOWN(prev_fp)) {
+  //         // 如果上一个帧指针和当前帧指针在不同的内存页，则停止遍历
+  //         break;
+  //     }
+
+  //     fp = prev_fp; // 移动到上一个帧指针
+  // }
+
+  do {
+    printf("%p\n", (void *) *(uint64 *)(fp - 8));
+    fp = *(uint64 *)(fp - 16);
+  } while (fp != PGROUNDDOWN(fp));
+}

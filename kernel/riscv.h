@@ -1,5 +1,14 @@
 #ifndef __ASSEMBLER__
 
+// 使用内联汇编将当前的帧指针（s0）的值存储到变量 x 中
+static inline uint64
+r_fp()
+{
+    uint64 x;
+    asm volatile("mv %0, s0" : "=r" (x));
+    return x;
+}
+
 // which hart (core) is this?
 static inline uint64
 r_mhartid()
