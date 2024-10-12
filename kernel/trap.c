@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "defs.h"
 
+void store(void);
+void restore(void);
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -28,6 +31,45 @@ trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
 }
+
+void 
+store(void)
+{
+  struct proc *p = myproc();
+  p->alarm_frame.epc = p->trapframe->epc;
+  p->alarm_frame.ra = p->trapframe->ra;
+  p->alarm_frame.sp = p->trapframe->sp;
+  p->alarm_frame.gp = p->trapframe->gp;
+  p->alarm_frame.tp = p->trapframe->tp;
+  p->alarm_frame.t0 = p->trapframe->t0;
+  p->alarm_frame.t1 = p->trapframe->t1;
+  p->alarm_frame.t2 = p->trapframe->t2;
+  p->alarm_frame.s0 = p->trapframe->s0;
+  p->alarm_frame.s1 = p->trapframe->s1;
+  p->alarm_frame.a0 = p->trapframe->a0;
+  p->alarm_frame.a1 = p->trapframe->a1;
+  p->alarm_frame.a2 = p->trapframe->a2;
+  p->alarm_frame.a3 = p->trapframe->a3;
+  p->alarm_frame.a4 = p->trapframe->a4;
+  p->alarm_frame.a5 = p->trapframe->a5;
+  p->alarm_frame.a6 = p->trapframe->a6;
+  p->alarm_frame.a7 = p->trapframe->a7;
+  p->alarm_frame.s2 = p->trapframe->s2;
+  p->alarm_frame.s3 = p->trapframe->s3;
+  p->alarm_frame.s4 = p->trapframe->s4;
+  p->alarm_frame.s5 = p->trapframe->s5;
+  p->alarm_frame.s6 = p->trapframe->s6;
+  p->alarm_frame.s7 = p->trapframe->s7;
+  p->alarm_frame.s8 = p->trapframe->s8;
+  p->alarm_frame.s9 = p->trapframe->s9;
+  p->alarm_frame.s10 = p->trapframe->s10;
+  p->alarm_frame.s11 = p->trapframe->s11;
+  p->alarm_frame.t3 = p->trapframe->t3;
+  p->alarm_frame.t4 = p->trapframe->t4;
+  p->alarm_frame.t5 = p->trapframe->t5;
+  p->alarm_frame.t6 = p->trapframe->t6;
+}
+
 
 //
 // handle an interrupt, exception, or system call from user space.
@@ -78,7 +120,20 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
+  {
+    if (p->ticks > 0)
+    {
+      p->ticks_cnt++;
+      if ((p->handler_executed = 0) && p->ticks_cnt > p->ticks)
+      {
+        p->ticks_cnt = 0;
+        store(); // 暂存
+        p->handler_executed = 1;
+        p->trapframe->epc = p->handler; // 切换
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
@@ -216,3 +271,62 @@ devintr()
   }
 }
 
+void
+restore(void)
+{
+  struct proc *p = myproc();
+  p->trapframe->epc = p->alarm_frame.epc;
+  p->trapframe->ra = p->alarm_frame.ra;
+  p->trapframe->sp = p->alarm_frame.sp;
+  p->trapframe->gp = p->alarm_frame.gp;
+  p->trapframe->tp = p->alarm_frame.tp;
+  p->trapframe->t0 = p->alarm_frame.t0;
+  p->trapframe->t1 = p->alarm_frame.t2;
+  p->trapframe->s0 = p->alarm_frame.s0;
+  p->trapframe->s1 = p->alarm_frame.s1;
+  p->trapframe->a0 = p->alarm_frame.a0;
+  p->trapframe->a1 = p->alarm_frame.a1;
+  p->trapframe->a2 = p->alarm_frame.a2;
+  p->trapframe->a3 = p->alarm_frame.a3;
+  p->trapframe->a4 = p->alarm_frame.a4;
+  p->trapframe->a5 = p->alarm_frame.a5;
+  p->trapframe->a6 = p->alarm_frame.a6;
+  p->trapframe->a7 = p->alarm_frame.a7;
+  p->trapframe->s2 = p->alarm_frame.s2;
+  p->trapframe->s3 = p->alarm_frame.s3;
+  p->trapframe->s4 = p->alarm_frame.s4;
+  p->trapframe->s5 = p->alarm_frame.s5;
+  p->trapframe->s6 = p->alarm_frame.s6;
+  p->trapframe->s7 = p->alarm_frame.s7;
+  p->trapframe->s8 = p->alarm_frame.s8;
+  p->trapframe->s9 = p->alarm_frame.s9;
+  p->trapframe->s10 = p->alarm_frame.s10;
+  p->trapframe->s11 = p->alarm_frame.s11;
+  p->trapframe->t3 = p->alarm_frame.t3;
+  p->trapframe->t4 = p->alarm_frame.t4;
+  p->trapframe->t5 = p->alarm_frame.t5;
+  p->trapframe->t6 = p->alarm_frame.t6;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  restore(); // 恢复
+  p->handler_executed = 0;
+  return p->trapframe->a0;
+}
+
+uint64
+sys_sigalarm(int ticks, void (*handler)()) // 
+{
+  // Your sys_sigalarm() should store the alarm i nterval and the pointer to the handler function in new fields in the proc structure (in kernel/proc.h).
+
+  struct proc *p = myproc();
+  p->ticks = ticks;
+  p->handler = (uint64) handler;
+  // You'll need to keep track of how many ticks have passed since the last call (or are left until the next call) to a process's alarm handler; you'll need a new field in struct proc for this too. You can initialize proc fields in allocproc() in proc.c.
+  p->ticks_cnt = 0;
+
+  return 0;
+}
