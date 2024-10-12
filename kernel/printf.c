@@ -195,6 +195,7 @@ backtrace(void) {
   //     fp = prev_fp; // 移动到上一个帧指针
   // }
 
+  // reference
   do {
     printf("%p\n", (void *) *(uint64 *)(fp - 8));
     fp = *(uint64 *)(fp - 16);
