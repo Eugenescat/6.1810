@@ -9,6 +9,10 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define NUM_SUPERPAGES 10  // 定义超级页的数量(handful)
+static char *superpages[NUM_SUPERPAGES]; // 超级页指针数组
+static int superpage_used[NUM_SUPERPAGES];  // 标记超级页是否已被使用
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -27,7 +31,17 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+
+  // 预留一块内存作为超级页
+  char *superpage_area = (char *)PGROUNDUP((uint64)end);
+
+  for (int i = 0; i < NUM_SUPERPAGES; i++) {
+    superpages[i] = superpage_area + i * SUPERPGSIZE;  // 为每个超级页分配 2MB 对齐的地址
+    superpage_used[i] = 0;  // 标记为未使用
+  }
+  
+  // 调用 freerange() 继续初始化普通页（4KB 页）
+  freerange(superpage_area + NUM_SUPERPAGES * SUPERPGSIZE, (void*)PHYSTOP);
 }
 
 void
@@ -81,17 +95,6 @@ kalloc(void)
   return (void*)r;
 }
 
-#define NUM_SUPERPAGES 10  // 定义超级页的数量(handful)
-static char *superpages[NUM_SUPERPAGES];
-static int superpage_used[NUM_SUPERPAGES];  // 标记超级页是否已被使用
-
-void superinit() {
-  for (int i = 0; i < NUM_SUPERPAGES; i++) {
-      superpages[i] = (char *)SUPERPGROUNDUP((uint64)kalloc());  // 确保每个超级页是 2MB 对齐
-      superpage_used[i] = 0;  // 初始化为未使用
-  }
-}
-
 void *superalloc(void) 
 {
   for (int i = 0; i < NUM_SUPERPAGES; i++) {
@@ -108,8 +111,8 @@ void superfree(void *ptr)
   for (int i = 0; i < NUM_SUPERPAGES; i++) {
       if (superpages[i] == ptr) {  // 找到对应的超级页
           superpage_used[i] = 0;  // 标记为未使用
+          memset(ptr, 1, SUPERPGSIZE);  // 填充内存以防止悬空引用
           return;
       }
   }
-  memset(ptr, 1, SUPERPGSIZE);
 }

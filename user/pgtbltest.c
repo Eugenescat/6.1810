@@ -94,6 +94,7 @@ supercheck(uint64 s)
     if(pte == 0)
       err("no pte");
     if ((uint64) last_pte != 0 && pte != last_pte) {
+        printf("last pte 0x%lx pte 0x%lx\n", last_pte, pte);
         err("pte different");
     }
     if((pte & PTE_V) == 0 || (pte & PTE_R) == 0 || (pte & PTE_W) == 0){
@@ -120,16 +121,22 @@ superpg_test()
   printf("superpg_test starting\n");
   testname = "superpg_test";
   
+  printf("start sbrk\n");
   char *end = sbrk(N);
   if (end == 0 || end == (char*)0xffffffffffffffff)
     err("sbrk failed");
   
   uint64 s = SUPERPGROUNDUP((uint64) end);
+  printf("sbrk: end = %p, s = 0x%lx\n", end, s);
+  printf("start first check\n");
   supercheck(s);
+  printf("end first check\n");
   if((pid = fork()) < 0) {
     err("fork");
   } else if(pid == 0) {
+    printf("start second check\n");
     supercheck(s);
+    printf("end second check\n");
     exit(0);
   } else {
     int status;

@@ -103,7 +103,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
 #ifdef LAB_PGTBL
-      if(PTE_LEAF(*pte)) {
+      if(PTE_LEAF(*pte) || PTE_SUPER & *pte) {
         return pte;
       }
 #endif
@@ -161,11 +161,18 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
   uint64 a, last;
   pte_t *pte;
+  int sz;
 
-  if((va % PGSIZE) != 0)
+  if (perm & PTE_SUPER) {
+    sz = SUPERPGSIZE;
+  } else {
+    sz = PGSIZE;
+  }
+
+  if((va % sz) != 0)
     panic("mappages: va not aligned");
 
-  if((size % PGSIZE) != 0)
+  if((size % sz) != 0)
     panic("mappages: size not aligned");
 
   if(size == 0)
@@ -177,34 +184,19 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
-      panic("mappages: remap");
+      {
+        printf("mappages: va=%ld, pte=%ld\n", a, *pte);
+        panic("mappages: remap");
+      }
     *pte = PA2PTE(pa) | perm | PTE_V;
+    if (*pte == 540576023) printf("mappages: va=%ld, pte=%ld\n", a, *pte);
     if(a == last)
       break;
     a += PGSIZE;
-    pa += PGSIZE;
+    if (sz == PGSIZE) pa += PGSIZE;
   }
   return 0;
 }
-
-// check if a va is projected to a superpage
-int is_superpage(pagetable_t pagetable, uint64 va)
-{
-  pte_t *pte;
-  for (int level = 2; level > 0; level--) {
-    pte = &pagetable[PX(level, va)]; // 从虚拟地址 va 中提取出当前级别的索引，并在当前级别页表中找到对应的页表项。
-    if (*pte & PTE_V) {
-      if (level == 1 && PTE_LEAF(*pte)){
-        return 1;
-      }
-      pagetable = (pagetable_t) PTE2PA(*pte);
-    } else {
-      return 0;
-    }
-  }
-  return 0;
-}
-
 
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
@@ -215,6 +207,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
   int sz;
+  int super_flag;
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
@@ -230,19 +223,18 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
 
-    // 如果是超级页（megapage），更新sz为超级页大小
-    if (is_superpage(pagetable, va)) {
-      sz = SUPERPGSIZE;  // 如果检测到超级页，则将页面大小设为 2MB
-    }
-
+    if (*pte & PTE_SUPER) super_flag = 1;
+    else super_flag = 0;
+    
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      if (sz == SUPERPGSIZE) {
-        superfree((void *)pa);  // 释放超级页
+      if (super_flag) {
+        superfree((void *)pa); // 可能会重复释放
       } else {
-        kfree((void*)pa);  // 释放普通页
+        kfree((void*)pa);
       }
     }
+    // printf("uvmunmap: va=%ld, pte=%ld\n", a, *pte);
     *pte = 0;
   }
 }
@@ -285,35 +277,100 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   char *mem;
   uint64 a;
   int sz;
+  uint64 pre_size;
 
   if(newsz < oldsz)
     return oldsz;
 
   oldsz = PGROUNDUP(oldsz);
-  for(a = oldsz; a < newsz; a += sz){
-    if(a % SUPERPGSIZE == 0 && newsz - a >= SUPERPGSIZE) // 确保地址 a 是 2MB 对齐的，且剩余的内存大小足够容纳一个超级页
+
+  printf("uvmalloc: oldsz %ld newsz %ld\n", oldsz, newsz);
+
+  // if a user program calls sbrk() with a size of 2 megabytes or more, and the newly created address range includes one or more areas that are two-megabyte-aligned and at least two megabytes in size, the kernel should use a single superpage (instead of hundreds of ordinary pages).
+  if (newsz - oldsz >= SUPERPGSIZE) 
+  {
+    pre_size = SUPERPGROUNDUP(oldsz) - oldsz; // 计算oldsz到第一个超级页的大小
+
+    // 对于新oldsz之前的区域，我们需要分配普通页
+    for (a = oldsz; a < oldsz + pre_size; a += PGSIZE) 
     {
-      sz = SUPERPGSIZE;  // 超级页大小为 2MB
-      mem = superalloc();  // 使用超级页分配函数
-    } else {
-      sz = PGSIZE;  // 普通页大小为 4KB
-      mem = kalloc();  // 使用普通页分配函数
+      mem = kalloc();
+      if (mem == 0) 
+      {
+        uvmdealloc(pagetable, a, oldsz);
+        return 0;
+      }
+      memset(mem, 0, PGSIZE);
+      if (mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0) 
+      {
+        kfree(mem);
+        uvmdealloc(pagetable, a, oldsz);
+        return 0;
+      }
     }
-    if(mem == 0){
-      uvmdealloc(pagetable, a, oldsz);
-      return 0;
+
+    // 分配超级页
+    oldsz = SUPERPGROUNDUP(oldsz);
+    sz = SUPERPGSIZE;
+    printf("uvmalloc: superpage\n");
+    for(a = oldsz; a < newsz - sz; a += sz)
+    {
+      mem = superalloc(); // 得到一个超级页的物理内存地址
+      printf("uvmalloc: va: %ld, superalloc mem %p\n", a, mem);
+      memset(mem, 0, sz);
+      if(mappages(pagetable, a, sz, (uint64)mem, PTE_SUPER|PTE_R|PTE_U|xperm) != 0)
+      {
+        superfree(mem);
+        uvmdealloc(pagetable, a, oldsz);
+        return 0;
+      }
     }
-#ifndef LAB_SYSCALL
-    memset(mem, 0, sz);
-#endif
-    if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
-      kfree(mem);
-      uvmdealloc(pagetable, a, oldsz);
-      return 0;
+
+    // 对于新oldsz之后的区域，我们需要分配普通页
+    uint64 tail = a;
+    while (tail < newsz) 
+    {
+      mem = kalloc();
+      if (mem == 0) 
+      {
+        uvmdealloc(pagetable, oldsz, newsz);
+        return 0;
+      }
+      memset(mem, 0, PGSIZE);
+      if (mappages(pagetable, tail, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0) 
+      {
+        kfree(mem);
+        uvmdealloc(pagetable, oldsz, newsz);
+        return 0;
+      }
+      tail += PGSIZE;
     }
   }
+  else // 如果不是超级页，那么就按照普通页的方式分配内存
+  {
+    sz = PGSIZE;
+    for(a = oldsz; a < newsz; a += sz){
+      mem = kalloc();
+      if(mem == 0){
+        uvmdealloc(pagetable, a, oldsz);
+        return 0;
+      }
+#ifndef LAB_SYSCALL
+      memset(mem, 0, sz);
+#endif
+      if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+        kfree(mem);
+        uvmdealloc(pagetable, a, oldsz);
+        return 0;
+      }
+    }
+  }
+
   return newsz;
+
 }
+
+
 
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
@@ -347,6 +404,7 @@ freewalk(pagetable_t pagetable)
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
     } else if(pte & PTE_V){
+      printf("pte: %ld\n", pte);
       panic("freewalk: leaf");
     }
   }
@@ -380,40 +438,35 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += szinc){
     szinc = PGSIZE;
-    szinc = PGSIZE;
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-
-    // 检查是否为超级页的条件
-    if (is_superpage(old, i)) 
     {
-      szinc = SUPERPGSIZE;  // 设置为超级页大小
+      panic("uvmcopy: page not present");
     }
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte); //  0-9位是权限位
 
-    // 根据页大小分配内存
-    if(szinc == SUPERPGSIZE) {
-      mem = superalloc();  // 分配超级页内存
+    // 如果是超级页
+    if((*pte & PTE_SUPER) != 0){
+      szinc = SUPERPGSIZE;  // 如果是超级页，步进大小设为2MB
+      mem = superalloc();
+      memmove(mem, (char*)pa, SUPERPGSIZE);  // 复制2MB的内容
+      if(mappages(new, i, SUPERPGSIZE, (uint64)mem, flags) != 0){
+        superfree(mem);
+        goto err;
+      }
+    } 
+    else // 普通页
+    {
+      mem = kalloc();
       if(mem == 0)
         goto err;
-      memmove(mem, (char*)pa, SUPERPGSIZE);  // 复制超级页大小的数据
-    } else {
-      mem = kalloc();  // 分配普通页内存
-      if(mem == 0)
+      memmove(mem, (char*)pa, PGSIZE);
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
         goto err;
-      memmove(mem, (char*)pa, PGSIZE);  // 复制普通页大小的数据
-    }
-
-    // 根据页大小映射页表
-    if(mappages(new, i, szinc, (uint64)mem, flags) != 0){
-      if(szinc == SUPERPGSIZE)
-        superfree(mem);  // 释放超级页
-      else
-        kfree(mem);  // 释放普通页
-      goto err;
+      }
     }
   }
   return 0;

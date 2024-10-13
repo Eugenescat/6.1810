@@ -290,6 +290,7 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
       return -1;
     }
+    printf("growproc: pid = %d, sz = %ld\n", p->pid, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
