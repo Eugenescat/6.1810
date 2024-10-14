@@ -67,7 +67,18 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  else if(r_scause() == 15) {  // scause 为 15 代表store/AMO page fault（即写入错误）
+    // When a write page-fault occurs on a COW page that was originally writeable, allocate a new page with kalloc(), copy the old page to the new page, and install the new page in the PTE with PTE_W set.
+    // stval 保存的是导致错误的虚拟地址
+    uint64 addr = r_stval();
+    // 判断是否为COW引发的错误（包括：如果一个COW page fault发生，但没有空闲内存，此进程应该被杀掉）
+    if(cowalloc(p->pagetable, addr) < 0){
+      printf("alloc user page fault addr=%ld\n", addr);
+      setkilled(p);
+    }
+  }
+  else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);

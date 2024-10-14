@@ -14,6 +14,12 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+// refNum[i] 表示物理页面 i 的引用计数
+struct {
+  struct spinlock lock;
+  int refNum[PHYSTOP / PGSIZE];
+} refNum_t;
+
 struct run {
   struct run *next;
 };
@@ -23,10 +29,64 @@ struct {
   struct run *freelist;
 } kmem;
 
+// 得到refNum_t的锁
+void
+acquireRefNumLock()
+{
+  acquire(&refNum_t.lock);
+}
+
+// 释放refNum_t的锁
+void
+releaseRefNumLock()
+{
+  release(&refNum_t.lock);
+}
+
+// 获取物理页面pa的引用计数
+int
+getRefNum(void *pa)
+{
+  acquire(&refNum_t.lock);
+  int cnt = refNum_t.refNum[(uint64)pa / PGSIZE];
+  release(&refNum_t.lock);
+  return cnt;
+}
+
+// 增加物理页面pa的引用计数
+void
+addRefNum(void *pa)
+{
+  acquire(&refNum_t.lock);
+  refNum_t.refNum[(uint64)pa / PGSIZE]++;
+  release(&refNum_t.lock);
+}
+
+// 减少物理页面pa的引用计数
+void
+subRefNum(void *pa)
+{
+  acquire(&refNum_t.lock);
+  refNum_t.refNum[(uint64)pa / PGSIZE]--;
+  release(&refNum_t.lock);
+}
+
+// 设置物理页面pa的引用计数为1
+void 
+setRefNum(void *pa)
+{
+  acquire(&refNum_t.lock);
+  refNum_t.refNum[(uint64)pa / PGSIZE] = 1;
+  release(&refNum_t.lock);
+}
+
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&refNum_t.lock, "refNum_t");
+  memset(refNum_t.refNum, 0, sizeof(refNum_t.refNum));
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -46,10 +106,16 @@ freerange(void *pa_start, void *pa_end)
 void
 kfree(void *pa)
 {
+
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  if (getRefNum(pa) > 1) {
+    subRefNum(pa);
+    return;
+  }
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -73,7 +139,10 @@ kalloc(void)
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
-    kmem.freelist = r->next;
+    {
+      kmem.freelist = r->next;
+      setRefNum((void*)r); // 设置引用计数为1
+    }
   release(&kmem.lock);
 
   if(r)

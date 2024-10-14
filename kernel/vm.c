@@ -15,6 +15,69 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+// va:页面错误的虚拟地址
+// 检查是否是 COW 页面
+int cowalloc(pagetable_t pagetable, uint64 va)
+{
+  // 虚拟地址超出范围，返回错误
+  if(va > MAXVA){
+    return -1;
+  }
+
+  pte_t *pte = walk(pagetable, va, 0);
+  // 页表项不存在，返回错误
+  if( pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0) {
+    return -1;
+  }
+
+  int flags = PTE_FLAGS(*pte);
+  uint64 pa = PTE2PA(*pte);
+  uint64 va_rounded = PGROUNDDOWN(va);
+
+  // 不是 cow 页且没有写权限，非法写入操作，返回错误
+  if(!(*pte & PTE_COW) && !(*pte & PTE_W))
+    {
+      return -1;
+    }
+  // 不是 cow 页或者有写权限，不进行处理
+  if( (*pte & PTE_W) || !(*pte & PTE_COW))
+    return 0;
+
+  // 如果COW页面的引用计数大于1，说明有多个进程共享该页面，需要复制一份
+
+  if (getRefNum((void*)pa) > 1)
+  {
+    // 申请一个物理页面
+    char *mem = kalloc();
+    if (mem == 0)
+    {
+      return -1;
+    }
+    // 将原物理页面的内容复制到新的物理页面
+    memmove(mem, (char*)pa, PGSIZE);
+    // 解除之前的 COW 映射
+    uvmunmap(pagetable, va_rounded, 1, 1);
+    // 准备新的页表项
+    flags &= ~PTE_COW;  // 清除页表项中的 COW 位。
+    flags |= PTE_W;  // 设置页表项中的 W 位。
+    // 将新的物理页面映射到虚拟地址
+    if (mappages(pagetable, va_rounded, PGSIZE, (uint64)mem, flags) != 0)
+    {
+      kfree(mem);
+      return -1;
+    }
+    return 0;
+  }
+  else if (getRefNum((void*)pa) == 1)
+  {
+    // 如果COW页面的引用计数等于1，说明只有一个进程在使用该页面，直接取消 COW 标记，设置写权限
+    *pte &= ~PTE_COW;
+    *pte |= PTE_W;
+    return 0;
+  }
+  return -1;
+}
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
@@ -315,7 +378,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -323,14 +386,25 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+
+    // 如果父进程的页面不是只读，将父进程的页面设置成 COW 页面，并将父进程的物理页面同步映射到子进程的页面中去
+    // Pages that were originally read-only (not mapped PTE_W, like pages in the text segment) should remain read-only and shared between parent and child; a process that tries to write such a page should be killed.
+    if(*pte & PTE_W){
+      *pte |= PTE_COW;
+      *pte &= ~PTE_W; // 取消写权限
+    }
+
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      // kfree(mem);
+      printf("uvmcopy: mappages failed\n");
       goto err;
     }
+    // 引用计数+1
+    addRefNum((void*)pa);
   }
   return 0;
 
@@ -363,6 +437,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+
+    // 如果尝试写入的该页面是 COW 页，COW 机制会分配一个新的页面并复制原页面的内容到新的物理页面。如果 cowalloc 失败，意味着内存分配失败或其他问题，则函数返回 -1 表示错误
+    if(cowalloc(pagetable, va0) < 0)
+      return -1;
+
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);

@@ -206,7 +206,7 @@ forkforktest()
       wait(&st);
     }
   }
-
+  printf("checkpoint ok\n");
   sleep(5);
   for(int i = 0; i < sz; i += 4096){
     if(p[i] != 27){
