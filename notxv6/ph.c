@@ -17,6 +17,7 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_mutex_t bkt_lock[NBUCKET];
 
 double
 now()
@@ -51,17 +52,17 @@ void put(int key, int value)
     // update the existing key.
     e->value = value;
   } else {
+    pthread_mutex_lock(&bkt_lock[i]); // 在准备插入新节点期间，其他线程可能会修改table[i]，所以需要加锁
     // the new is new.
     insert(key, value, &table[i], table[i]);
+    pthread_mutex_unlock(&bkt_lock[i]);
   }
-
 }
 
 static struct entry*
 get(int key)
 {
   int i = key % NBUCKET;
-
 
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
@@ -116,6 +117,12 @@ main(int argc, char *argv[])
   assert(NKEYS % nthread == 0);
   for (int i = 0; i < NKEYS; i++) {
     keys[i] = random();
+  }
+
+  // init
+  for (int i = 0; i < NBUCKET; i++) {
+    table[i] = 0;
+    pthread_mutex_init(&bkt_lock[i], NULL);
   }
 
   //
