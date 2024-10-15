@@ -10,11 +10,30 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+struct context {
+  uint64 ra;
+  uint64 sp;
+
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  struct context ctx;
 };
+
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
 extern void thread_switch(uint64, uint64);
@@ -54,12 +73,13 @@ thread_schedule(void)
 
   if (current_thread != next_thread) {         /* switch threads?  */
     next_thread->state = RUNNING;
-    t = current_thread;
-    current_thread = next_thread;
+    t = current_thread; // 保存当前线程
+    current_thread = next_thread; // 将当前线程更新为下一个线程
     /* YOUR CODE HERE
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)&t->ctx, (uint64)&next_thread->ctx);
   } else
     next_thread = 0;
 }
@@ -69,11 +89,15 @@ thread_create(void (*func)())
 {
   struct thread *t;
 
+  // Find a FREE thread slot
   for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
     if (t->state == FREE) break;
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  // 设置 ra 和 sp 寄存器
+  t->ctx.ra = (uint64) func;
+  t->ctx.sp = (uint64) &t->stack + (STACK_SIZE - 1); // 在 C 语言中，一个数组的空间是从低地址向高地址分配的，所以此时 t->stack 是这个数组的低地址，栈空间是从高往低填充的,所以要加上数组的大小，才能得到数组的高地址
 }
 
 void 
